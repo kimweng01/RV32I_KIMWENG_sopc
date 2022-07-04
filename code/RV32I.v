@@ -11,18 +11,28 @@ module RV32I(
 	output							rom_ce_o,
 	
 	//=======================================
-	input			[`RegBus]		ram_data_i,
+	//input			[`RegBus]		ram_data_i,
+	//
+	//output			[`RegBus]		ram_addr_o,
+	//output			[`RegBus]		ram_data_o,
+	//output							ram_we_o,
+	//output			[3:0]			ram_sel_o,
+	//output							ram_ce_o,   //因為RV32I會多一個到CLINT的映射，所以改寫成這樣--
+													//												 |
+													//												 |
+	//========================================      //                                               |
+	input							int_real,          //                                               |
+													//												 |
+	input							time_up,		//                                               |
+													//												 |
+	//========================================      //                                               |
+	input			[`RegBus]		mem_data_i,     //   <--------------------------------------------
 	
-	output			[`RegBus]		ram_addr_o,
-	output			[`RegBus]		ram_data_o,
-	output							ram_we_o,
-	output			[3:0]			ram_sel_o,
-	output							ram_ce_o,
-	
-	//========================================
-	input			[15:0]			int_i,
-	
-	output							timer_int_o
+	output							mem_ce_o,
+	output			[`RegBus]		mem_data_o,
+	output			[`RegBus]		mem_addr_o,
+	output							mem_we_o,
+	output			[3:0]			mem_sel_o
 	);
 	
 /*	//ctrl
@@ -30,19 +40,17 @@ module RV32I(
 	wire        					stall_from_ex;
 	        
 	wire       		[5:0]			stall;		*/
-		
 	
+
 	//ID~IF
-	wire			[`RegBus]		id_btaddr_o;
-	wire							id_brflag_o;
+	wire			[`RegBus]		branch_tar_addr_pred;
+	wire							branch_flag_pred;
 	
 	
 	//IF/FD~ID
 	wire			[`InstAddrBus]	pc;
 	wire			[`InstAddrBus]	id_pc_i;
 	wire			[`RegBus]		id_inst_i;
-	wire			[`RegBus]		branch_target_address_i;
-	wire							branch_flag_i;
 	
 	wire							stall_from_id;
 	wire        					stall_from_ex;	 
@@ -85,13 +93,16 @@ module RV32I(
 	wire			[`RegAddrBus]	ex_wd_i;
 	
 	wire			[`RegBus]		ex_link_addr_i;
-    wire							ex_dlyslot_now_i;
+    //wire							ex_dlyslot_now_i;
+
 	
 	wire			[`RegBus]		ex_current_inst_addr_i;
 	wire			[`RegBus]		ex_excepttype_i;
 	
 
 	//EX~EX/MEM
+	wire			[`RegBus]		ex_inst_o;
+	
 	wire							ex_wreg_o;
 	wire			[`RegAddrBus]	ex_wd_o;
 	wire			[`RegBus]		ex_wdata_o;
@@ -117,17 +128,20 @@ module RV32I(
 	//wire			[4:0]			ex_cnt_div_i;
 	
 	wire							ex_csr_reg_we_o;
-	wire			[4:0]			ex_csr_reg_wr_addr_o;
+	wire			[11:0]			ex_csr_reg_addr_o;
 	wire			[`RegBus]		ex_csr_reg_data_o;
-	
-	wire			[4:0]			ex_csr_reg_rd_addr_o;
 	
 	//wire					 		ex_dlyslot_now_o;
 	wire			[`RegBus]		ex_excepttype_o;
 	wire			[`RegBus]		ex_current_inst_addr_o; 
 	
+	wire			[`RegBus]		ex_branch_tar_addr_real_o;
+	wire							ex_branch_flag_real_o;
+	
 	
 	//EX/MEM~MEM
+	wire			[`RegBus]		mem_inst_i;
+	
 	wire							mem_wreg_i;
 	wire			[`RegAddrBus]	mem_wd_i;
 	wire			[`RegBus]		mem_wdata_i;
@@ -141,12 +155,17 @@ module RV32I(
 	wire			[`RegBus]		mem_reg2_i;
 	
 	wire							mem_csr_reg_we_i;
-	wire			[4:0]			mem_csr_reg_wr_addr_i;
+	wire			[11:0]			mem_csr_reg_addr_i;
 	wire			[`RegBus]		mem_csr_reg_data_i;
 	
 	//wire							mem_dlyslot_now_i;
 	wire			[`RegBus]		mem_current_inst_addr_i;
 	wire			[`RegBus]		mem_excepttype_i;
+	
+	
+	//EX/MEM~Hazard
+	wire			[`RegBus]		hazard_branch_tar_addr_real_i;
+	wire							hazard_branch_flag_real_i;
 	
 	
 	//MEM~MEM/WB
@@ -162,7 +181,7 @@ module RV32I(
 	//wire							mem_LLbit_value_o;
 	
 	wire							mem_csr_reg_we_o;
-	wire			[4:0]			mem_csr_reg_wr_addr_o;
+	wire			[11:0]			mem_csr_reg_addr_o;
 	wire			[`RegBus]		mem_csr_reg_data_o;
 	
 	
@@ -198,36 +217,35 @@ module RV32I(
 	
 	//MEM~Hazard
 	wire			[`RegBus]		mem_csr_mepc_o;
+	wire			[`RegBus]		mem_csr_mtvec_o;
 	
 	
-	//MEM~CP0
+	//MEM~CSR
 	wire							mem_dlyslot_now_o;
 	wire			[`RegBus]		mem_excepttype_o;
 	wire			[`RegBus]		mem_current_inst_addr_o;
 	
 	
-	//MEM/WB~CP0
+	//MEM/WB~CSR
 	wire							wb_csr_reg_we_i;
-	wire			[4:0]			wb_csr_reg_wr_addr_i;
+	wire			[11:0]			wb_csr_reg_addr_i;
 	wire			[`RegBus]		wb_csr_reg_data_i;
 
 	
-	//CP0~EX
+	//CSR~EX
 	wire			[`RegBus]		csr_reg_data_o;
 	
 	
-	//CP0~MEM
+	//CSR~MEM
 	/*wire			[`RegBus]		mem_csr_reg_we_i;
-	wire			[`RegBus]		mem_csr_reg_wr_addr_i;
+	wire			[`RegBus]		mem_csr_reg_addr_i;
 	wire			[`RegBus]		mem_csr_reg_data_i;	*/
-	
-	wire							mem_csr_mstatus_i;
-	wire			[4:0]			mem_csr_mcause_i;
-	wire			[`RegBus]		mem_csr_mepc_i;
+
 	
 	wire			[`RegBus]		mstatus_o;
-	wire			[`RegBus]		mcause_o;
 	wire			[`RegBus]		mepc_o;
+	wire			[`RegBus]		mtvec_o;
+	wire			[`RegBus]		mie_o;
 	
 	
 	//Regfile
@@ -254,8 +272,7 @@ module RV32I(
 
 	
 	//PLIC				
-	wire							int_real;
-	wire							time_up;
+	//wire							int_real;
 	
 
 
@@ -343,8 +360,8 @@ id id0(
 	//.branch_tar_addr_real_o		(branch_tar_addr_real),
 	//.branch_flag_real_o			(branch_flag_real),
 	//.next_dlyslot_o				(next_dlyslot),
-	.branch_tar_addr_real_o		(id_branch_tar_addr_real_o),
-	.branch_flag_real_o			(id_branch_flag_real_o),
+	//.branch_tar_addr_real_o		(id_branch_tar_addr_real_o),
+	//.branch_flag_real_o			(id_branch_flag_real_o),
 	
 	.excepttype_o				(id_excepttype_o),
 	.current_inst_addr_o		(id_current_inst_addr_o),
@@ -399,8 +416,8 @@ id_ex id_ex0(
 	.id_link_addr			(id_link_addr),
 	//.next_dlyslot			(next_dlyslot),
 	
-	.id_branch_tar_addr_real(id_branch_tar_addr_real_o),
-	.id_branch_flag_real	(id_branch_flag_rea_o),	
+	//.id_branch_tar_addr_real(id_branch_tar_addr_real_o),
+	//.id_branch_flag_real	(id_branch_flag_rea_o),	
 	
 	.id_current_inst_addr	(id_current_inst_addr_o),
 	.id_excepttype			(id_excepttype_o),
@@ -420,8 +437,8 @@ id_ex id_ex0(
 	//.ex_dlyslot_now			(ex_dlyslot_now_i),
 	//.dlyslot_now			(dlyslot_now),
 	
-	.ex_branch_tar_addr_real(ex_branch_tar_addr_real_i),
-	.ex_branch_flag_real	(ex_branch_flag_rea_i),	
+	//.ex_branch_tar_addr_real(ex_branch_tar_addr_real_i),
+	//.ex_branch_flag_real	(ex_branch_flag_rea_i),	
 	
 	
 	.ex_current_inst_addr	(ex_current_inst_addr_i),
@@ -474,11 +491,11 @@ ex ex0(
 	
 	//**********************************
 	.mem_csr_reg_we		(mem_csr_reg_we_o),
-	.mem_csr_reg_wr_addr(mem_csr_reg_wr_addr_o),
+	.mem_csr_reg_addr	(mem_csr_reg_addr_o),
 	.mem_csr_reg_data	(mem_csr_reg_data_o),
 	
 	.wb_csr_reg_we		(wb_csr_reg_we_i),
-	.wb_csr_reg_wr_addr	(wb_csr_reg_wr_addr_i),
+	.wb_csr_reg_addr	(wb_csr_reg_addr_i),
 	.wb_csr_reg_data   	(wb_csr_reg_data_i),
 	
 	.csr_reg_data_i		(csr_reg_data_o),
@@ -487,8 +504,8 @@ ex ex0(
 	.current_inst_addr_i(ex_current_inst_addr_i),
 	.excepttype_i		(ex_excepttype_i),
 
-	.branch_tar_addr_real_i	(ex_branch_tar_addr_real_i),
-	.branch_flag_real_i		(ex_excepttype_i),	
+	//.branch_tar_addr_real_i	(ex_branch_tar_addr_real_i),
+	//.branch_flag_real_i		(ex_excepttype_i),	
 		
 	//============================================
 	.inst_o				(ex_inst_o),
@@ -516,22 +533,20 @@ ex ex0(
 	
 	//***********************************
 	.csr_reg_we_o		(ex_csr_reg_we_o),
-	.csr_reg_wr_addr_o  (ex_csr_reg_wr_addr_o),	
+	.csr_reg_addr_o  	(ex_csr_reg_addr_o),	
 	.csr_reg_data_o     (ex_csr_reg_data_o),	
-
-	.csr_reg_rd_addr_o  (ex_csr_reg_rd_addr_o),
 	
 	//++++++++++++++++++++++++++++++++++++
 	.branch_tar_addr_real_o	(ex_branch_tar_addr_real_o),
 	.branch_flag_real_o		(ex_branch_flag_real_o),
 	
-	.stallreq			(stall_from_ex),
+	.stallreq				(stall_from_ex),
 	
 	//.dlyslot_now_o		(ex_dlyslot_now_o),
-	.excepttype_o		(ex_excepttype_o),
-	.current_inst_addr_o(ex_current_inst_addr_o),
+	.excepttype_o			(ex_excepttype_o),
+	.current_inst_addr_o	(ex_current_inst_addr_o)
 	
-	.trapassert_o		(ex_trapassert_o)
+	//.trapassert_o			(ex_trapassert_o)
 	);
 
 	
@@ -554,8 +569,8 @@ ex_mem	ex_mem0(
 	.ex_mem_addr			(ex_mem_addr_o),
 	.ex_reg2				(ex_reg2_o),
 	
-	//.ex_branch_tar_addr_real(ex_branch_tar_addr_real_o),
-	//.ex_branch_flag_real	(ex_branch_flag_real_o),
+	.ex_branch_tar_addr_real(ex_branch_tar_addr_real_o),
+	.ex_branch_flag_real	(ex_branch_flag_real_o),
 
 	//---------------------------------
 	.mem_inst				(mem_inst_i),
@@ -587,11 +602,11 @@ ex_mem	ex_mem0(
 	
 	//--------------------------------
 	.ex_csr_reg_we			(ex_csr_reg_we_o),
-	.ex_csr_reg_wr_addr 	(ex_csr_reg_wr_addr_o),	
+	.ex_csr_reg_addr 		(ex_csr_reg_addr_o),	
 	.ex_csr_reg_data    	(ex_csr_reg_data_o),
 		
 	.mem_csr_reg_we			(mem_csr_reg_we_i),
-	.mem_csr_reg_wr_addr	(mem_csr_reg_wr_addr_i),
+	.mem_csr_reg_addr		(mem_csr_reg_addr_i),
 	.mem_csr_reg_data   	(mem_csr_reg_data_i),
 	
 	//---------------------------------
@@ -607,11 +622,11 @@ ex_mem	ex_mem0(
 	.mem_branch_flag_real	 (hazard_branch_flag_real_i),
 	//---------------------------------
 	.stall					(stall),
-	.flush					(flush),
+	.flush					(flush)
 	
 	//---------------------------------
-	.ex_trapassert			(ex_trapassert_o),
-	.mem_trapassert         (mem_trapassert_i)
+	//.ex_trapassert			(ex_trapassert_o)
+	//.mem_trapassert         (mem_trapassert_i)
 	);
 
 	
@@ -631,22 +646,25 @@ mem mem0(
 	.mem_addr_i				(mem_mem_addr_i),
 	.reg2_i					(mem_reg2_i),
 			
-	.mem_data_i				(cpu_data_o), //from wishbone for data
+	.mem_data_i				(mem_data_i), //from wishbone for data
 		
 	//.LLbit_i				(wb_LLbit_o),
 	//.wb_LLbit_we_i			(wb_LLbit_we_i),
 	//.wb_LLbit_value_i		(wb_LLbit_value_i),
 		
 	.wb_csr_reg_we_i		(wb_csr_reg_we_i),
-	.wb_csr_reg_wr_addr_i	(wb_csr_reg_wr_addr_i),
+	.wb_csr_reg_addr_i		(wb_csr_reg_addr_i),
 	.wb_csr_reg_data_i		(wb_csr_reg_data_i),
 		
-	.csr_mstatus_i			(mstatus_o),
-	.csr_mcause_i			(mcause_o),
+	.csr_mstatus_i			(mstatus_o), //刻意接進mem以隨時監看csr各暫存器的值
+	//.csr_mcause_i			(mcause_o),
 	.csr_mepc_i				(mepc_o),
+	.csr_mtvec_i			(mtvec_o),
+	.csr_mie_i				(mie_o),
+	//.csr_mip_i				(mip_o),
 	
 	.csr_reg_we_i			(mem_csr_reg_we_i),
-	.csr_reg_wr_addr_i		(mem_csr_reg_wr_addr_i),
+	.csr_reg_addr_i			(mem_csr_reg_addr_i),
 	.csr_reg_data_i   		(mem_csr_reg_data_i),
 	
 	//.dlyslot_now_i			(mem_dlyslot_now_i),
@@ -656,7 +674,7 @@ mem mem0(
 	.int_i					(int_real),
 	.time_up_i				(time_up),
 	
-	.trapassert_i			(mem_trapassert_i),
+	//.trapassert_i			(mem_trapassert_i),
 	//-------------------------
 	.wd_o					(mem_wd_o),
 	.wreg_o					(mem_wreg_o),
@@ -666,17 +684,17 @@ mem mem0(
 	//.lo_o					(mem_lo_o),
 	//.whilo_o				(mem_whilo_o),
 			
-	.mem_addr_o				(ram_addr_o),
-	.mem_we_o				(ram_we_o),
-	.mem_sel_o				(ram_sel_o),
-	.mem_data_o				(ram_data_o),
-	.mem_ce_o				(ram_ce_o),
+	.mem_addr_o				(mem_addr_o),
+	.mem_we_o				(mem_we_o),
+	.mem_sel_o				(mem_sel_o),
+	.mem_data_o				(mem_data_o),
+	.mem_ce_o				(mem_ce_o),
 			
 	//.LLbit_we_o				(mem_LLbit_we_o),
 	//.LLbit_value_o			(mem_LLbit_value_o),
 		
 	.csr_reg_we_o			(mem_csr_reg_we_o),
-	.csr_reg_wr_addr_o		(mem_csr_reg_wr_addr_o),
+	.csr_reg_addr_o			(mem_csr_reg_addr_o),
 	.csr_reg_data_o  		(mem_csr_reg_data_o),
 		
 	//.dlyslot_now_o			(mem_dlyslot_now_o),
@@ -705,7 +723,7 @@ mem_wb mem_wb0(
 	//.mem_LLbit_value		(mem_LLbit_value_o),
 	
 	.mem_csr_reg_we			(mem_csr_reg_we_o),
-	.mem_csr_reg_wr_addr	(mem_csr_reg_wr_addr_o),
+	.mem_csr_reg_addr		(mem_csr_reg_addr_o),
 	.mem_csr_reg_data		(mem_csr_reg_data_o),
 	
 	//=========================================
@@ -723,7 +741,7 @@ mem_wb mem_wb0(
 	
 	//-----------------------------
 	.wb_csr_reg_we			(wb_csr_reg_we_i),
-	.wb_csr_reg_wr_addr		(wb_csr_reg_wr_addr_i),
+	.wb_csr_reg_addr		(wb_csr_reg_addr_i),
 	.wb_csr_reg_data		(wb_csr_reg_data_i),
 	
 	.stall					(stall),
@@ -768,8 +786,7 @@ csr csr0(
 	.inst_i				(mem_inst_i),
 
 	.we_i           	(wb_csr_reg_we_i),
-	.waddr_i       	 	(wb_csr_reg_wr_addr_i),
-	.raddr_i			(ex_csr_reg_rd_addr_o),
+	.addr_i       	 	(mem_csr_reg_addr_o),
 	.data_i       	 	(wb_csr_reg_data_i),
 
 	//.int_i				(int_i), //INPUT
@@ -783,15 +800,17 @@ csr csr0(
 	//.count_o       	(count_o),
 	//.compare_o		(compare_o),
 	.mtvec_o			(mtvec_o),
-	.mcause_o			(mcause_o),
+	//.mcause_o			(mcause_o),
 	.mepc_o				(mepc_o),
-	.mtval_o			(mtval_o),
+	//.mtval_o			(mtval_o),
 	.mstatus_o			(mstatus_o),
+	.mie_o				(mie_o)
+	//.mip_o				(mip_o)
 	
 	//.config_o			(config_o),
 	//.prid_o			(prid_o),
 	
-	.timer_int_o		(timer_int_o) //OUTPUT
+	//.timer_int_o		(timer_int_o) //OUTPUT
 	);
 	
 	
@@ -812,59 +831,59 @@ hazard hazard0(
     .stall             	 	(stall),
 	.flush					(flush),
 	
-	.new_pc					(new_pc)
+	.new_pc                 (new_pc)
 	);
 	
 	
-//CLINT
-clint clint0(
-	.clk			(clk),	
-	.rst            (rst),  
-
-	.we_i           (clint_we_o),
-	.addr_i        	(clint_addr_o),
-	.data_i         (clint_data_o),
-	
-	//------------------------------------
-	.data_o        	(clint_data_i)
-	);
-
-
-//PLIC
-plic plic0(
-	.int_i			(int_i),
-	
-	.int_o			(int_real)
-	);
-	
-
-//wishbone for data
-wishbone_buf_if wishbone_buf_if0(
-	.cpu_ce_i			(cpu_ce_i),
-	.cpu_data_i			(cpu_data_i),
-	.cpu_addr_i			(cpu_addr_i),
-	.cpu_we_i			(cpu_we_i),
-	.cpu_sel_i			(cpu_sel_i),
-	
-	.cpu_data_o			(cpu_data_o),
-	
-	//---------------------------------
-	.ram_data_i			(ram_data_i),
-						
-	.ram_ce_o			(ram_ce_o),
-	.ram_data_o			(ram_data_o),
-	.ram_addr_o			(ram_addr_o),
-	.ram_we_o			(ram_we_o),
-	.ram_sel_o			(ram_sel_o),
-						
-						
-	.clint_data_i		(clint_data_i),
-						
-	.clint_ce_o			(clint_ce_o),
-	.clint_data_o		(clint_data_o),
-	.clint_addr_o		(clint_addr_o),
-	.clint_we_o			(clint_we_o)
-	);	
+////CLINT
+//clint clint0(
+//	.clk			(clk),	
+//	.rst            (rst),  
+//
+//	.we_i           (clint_we_o),
+//	.addr_i        	(clint_addr_o),
+//	.data_i         (clint_data_o),
+//	
+//	//------------------------------------
+//	.data_o        	(clint_data_i)
+//	);
+//
+//
+////PLIC
+//plic plic0(
+//	.int_i			(int_i),
+//	
+//	.int_o			(int_real)
+//	);
+//	
+//
+////wishbone for data
+//wishbone_buf_if wishbone_buf_if0(
+//	.cpu_ce_i			(mem_ce_o),
+//	.cpu_data_i			(mem_data_o),
+//	.cpu_addr_i			(mem_addr_o),
+//	.cpu_we_i			(mem_we_o),
+//	.cpu_sel_i			(mem_sel_o),
+//	
+//	.cpu_data_o			(mem_data_i), //把從ram或clint拿到的data送入mem.v
+//	
+//	//---------------------------------
+//	.ram_data_i			(ram_data_i),
+//						
+//	.ram_ce_o			(ram_ce_o),
+//	.ram_data_o			(ram_data_o),
+//	.ram_addr_o			(ram_addr_o),
+//	.ram_we_o			(ram_we_o),
+//	.ram_sel_o			(ram_sel_o),
+//						
+//						
+//	.clint_data_i		(clint_data_i),
+//						
+//	.clint_ce_o			(clint_ce_o),
+//	.clint_data_o		(clint_data_o),
+//	.clint_addr_o		(clint_addr_o),
+//	.clint_we_o			(clint_we_o)
+//	);	
 
 	
 endmodule
